@@ -53,7 +53,8 @@ export function shell(ctx, active, ...content) {
     ['admin', `${base}/admin`, ctx.admin],
   ];
   return h('div', null,
-    h('div', { class: 'hero' },
+    // The overview has its own banner with the title.
+    active === 'overview' ? null : h('div', { class: 'hero' },
       h('div', { class: 'row' }, h('h1', null, pick(ctx.h, 'title')), statusBadge(ctx.h.status))),
     h('nav', { class: 'tabs', 'aria-label': t('nav.sections') },
       tabs.filter(([, , show]) => show).map(([key, href]) =>

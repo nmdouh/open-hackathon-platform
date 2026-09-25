@@ -14,6 +14,7 @@ import { toolboxView } from './views/toolbox.js';
 import { reviewsView, roundView, scoreView } from './views/reviews.js';
 import { adminHackathonView, adminRoundView } from './views/admin-hackathon.js';
 import { adminGlobalView } from './views/admin-global.js';
+import { notificationsView } from './views/notifications.js';
 
 // Route patterns: ":name" captures a segment.
 const ROUTES = [
@@ -22,6 +23,7 @@ const ROUTES = [
   ['signup', signupView],
   ['profile', profileView, { auth: true }],
   ['admin', adminGlobalView, { auth: true }],
+  ['notifications', notificationsView, { auth: true }],
   ['h/:slug', overviewView],
   ['h/:slug/me', participateView, { auth: true }],
   ['h/:slug/ideas', ideasView, { auth: true }],
@@ -72,6 +74,7 @@ export async function render() {
   const { path, query } = currentPath();
   const m = match(path);
   renderChrome();
+  pollUnread(path === 'notifications');
   if (!m) {
     mount(app, h('div', { class: 'empty' }, t('common.notFound'), ' ', h('a', { href: '#/' }, t('nav.home'))));
     return;
@@ -110,7 +113,9 @@ function renderChrome() {
   mount(document.getElementById('footer-text'), t('app.footer'));
   const account = document.getElementById('account');
   if (state.user) {
+    const count = h('span', { class: `bell__count${state.unread ? '' : ' hidden'}` }, state.unread > 99 ? '99+' : String(state.unread || 0));
     mount(account,
+      h('a', { class: 'btn btn--ghost btn--icon bell', href: '#/notifications', 'aria-label': t('notif.bell', { n: state.unread || 0 }), title: t('notif.title') }, '🔔', count),
       state.user.role === 'admin' ? h('a', { class: 'btn btn--ghost', href: '#/admin' }, t('nav.admin')) : null,
       h('a', { class: 'btn btn--ghost', href: '#/profile', title: state.user.email }, state.user.displayName),
       h('button', { type: 'button', class: 'btn btn--secondary btn--small', onclick: (e) => busy(e.currentTarget, logout) }, t('nav.logout')));
@@ -119,6 +124,20 @@ function renderChrome() {
       h('a', { class: 'btn btn--ghost', href: '#/login' }, t('nav.login')),
       state.config && state.config.allowSignup ? h('a', { class: 'btn btn--small', href: '#/signup' }, t('nav.signup')) : null);
   }
+}
+
+// Unread count for the bell: refreshed on navigation and once a minute.
+let lastPoll = 0;
+async function pollUnread(force = false) {
+  if (!state.user || (!force && Date.now() - lastPoll < 20000)) return;
+  lastPoll = Date.now();
+  try {
+    const { unread } = await api.get('/notifications/unread');
+    if (unread !== state.unread) {
+      state.unread = unread;
+      renderChrome();
+    }
+  } catch { /* offline or signed out; the next render handles it */ }
 }
 
 async function logout() {
@@ -157,6 +176,7 @@ async function boot() {
   state.config = config;
   state.user = me.user;
   if (state.user && !hasStoredLang()) setLang(state.user.locale);
+  setInterval(() => pollUnread(true), 60000);
   window.addEventListener('hashchange', () => {
     render();
     document.getElementById('main').focus({ preventScroll: true });

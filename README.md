@@ -10,12 +10,14 @@ Licensed under the [Apache License 2.0](LICENSE).
 |---|---|
 | **Registration** | Accounts, one registration per person per hackathon, two roles: *idea owner* or *team member*, skills and bio |
 | **Ideas** | Drafts and submission with a structured template (problem, solution, users, impact, data), tracks, deadlines |
-| **Teams** | One team per idea, applications with messages, capacity limits, a cap on open applications, accept / decline / leave / remove |
+| **Teams** | One team per idea, applications **and invitations**, explainable **skill matchmaking** (suggested teams for members, suggested people for owners), capacity limits, search and filters |
 | **Mentoring** | Mentor roster with expertise and capacity, team requests, mentors claim and schedule sessions, notes shared with the team |
+| **Build milestones** | An interactive build roadmap: each team ticks off milestones with evidence links; progress shows on team cards, Pulse and the organiser dashboard |
 | **Progress wall** | Daily updates, blockers, demo links and *help wanted* posts that other teams can answer; a **Pulse** view flags teams quiet for 48 hours |
 | **Screening, reviews, final judging** | Review rounds with weighted criteria, a committee with a chair, private scoring, declared and automatic conflicts of interest, minimum votes, top-N or majority suggestions, overrides that require a written reason, finalisation and published results |
-| **Toolbox** | Built-in bilingual guides (build plan, pitch structure, responsible AI), organiser resources, and an optional **AI coach** that gives feedback against the hackathon's own criteria |
-| **Administration** | Hackathon settings, timeline, announcements, participant overview with CSV export, users, and an append-only **audit log** of every change |
+| **Toolbox** | Bilingual guides, a copy-ready **prompt library**, a segmented **pitch rehearsal timer**, organiser resources, and an optional **AI coach** that gives feedback against the hackathon's own criteria |
+| **Participant experience** | A **journey stepper** and a personal *next step*, live countdown and statistics, **in-app notifications**, results podium, light/dark themes |
+| **Administration** | **Organiser dashboard** (participation funnel, teams at risk, track and review progress), settings, timeline, milestones, announcements, participant export, AI coach settings, users, and an append-only **audit log** |
 
 ### Fairness by design
 

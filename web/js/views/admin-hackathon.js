@@ -2,13 +2,13 @@ import { api, enc } from '../api.js';
 import { t } from '../i18n.js';
 import {
   h, pick, badge, emptyState, busy, toast, field, formValues, fmtDate, fmtNum, confirmDialog,
-  toLocalInput, fromLocalInput, splitList,
+  toLocalInput, fromLocalInput, splitList, progressBar,
 } from '../ui.js';
 import { refresh, go } from '../app.js';
 import { hackCtx, shell } from './shell.js';
 import { roundBadge } from './reviews.js';
 
-const TABS = ['settings', 'timeline', 'announcements', 'participants', 'rounds', 'mentors', 'resources', 'audit'];
+const TABS = ['dashboard', 'settings', 'timeline', 'milestones', 'announcements', 'participants', 'rounds', 'mentors', 'resources', 'audit'];
 
 function subnav(slug, active) {
   return h('nav', { class: 'row', 'aria-label': t('admin.sections') }, TABS.map((k) => h('a', {
@@ -29,6 +29,106 @@ function submitForm(form, fn) {
 const input = (name, value, attrs = {}) => h('input', { type: 'text', name, value: value ?? '', ...attrs });
 const textarea = (name, value, attrs = {}) => h('textarea', { name, value: value ?? '', ...attrs });
 const dateInput = (name, value) => h('input', { type: 'datetime-local', name, value: toLocalInput(value) });
+
+// ---------------------------------------------------------------- dashboard
+async function dashboardTab(ctx) {
+  const d = await api.get(`/hackathons/${ctx.h.id}/dashboard`);
+  const f = d.funnel;
+  const steps = [
+    ['registered', f.registered], ['ideasStarted', f.ideasStarted], ['ideasSubmitted', f.ideasSubmitted],
+    ['teams', f.teams], ['teamsReady', f.teamsReady], ['advanced', f.advanced],
+  ];
+  const max = Math.max(1, ...steps.map(([, n]) => n));
+  const tile = (n, label, accent) => h('div', { class: `tile${accent ? ' tile--accent' : ''}` }, h('strong', null, fmtNum(n, 0)), h('span', null, label));
+  const base = `#/h/${enc(ctx.slug)}`;
+  return h('div', { class: 'stack' },
+    h('div', { class: 'tiles' },
+      tile(f.lookingForTeam, t('dash.lookingForTeam'), f.lookingForTeam > 0),
+      tile(d.atRisk.length, t('dash.atRiskCount'), d.atRisk.length > 0),
+      tile(d.activity.posts24h, t('dash.posts24h')),
+      tile(d.activity.openHelp, t('dash.openHelp'), d.activity.openHelp > 0),
+      tile(d.mentoring.open, t('dash.mentoringOpen'), d.mentoring.open > 0),
+      tile(d.mentoring.done, t('dash.mentoringDone'))),
+    h('div', { class: 'grid-2' },
+      h('section', { class: 'card stack-sm' },
+        h('h2', null, t('dash.funnel')),
+        h('div', { class: 'funnel' }, steps.map(([k, n]) => {
+          const bar = h('i');
+          bar.style.width = `${Math.round((n / max) * 100)}%`;
+          return h('div', { class: 'funnel__row' }, h('span', { class: 'small' }, t(`dash.f.${k}`)), h('div', { class: 'funnel__bar' }, bar), h('strong', { class: 'num' }, fmtNum(n, 0)));
+        }))),
+      h('section', { class: 'card stack-sm' },
+        h('h2', null, t('dash.atRisk')),
+        d.atRisk.length ? h('div', { class: 'stack-sm' }, d.atRisk.map((x) => h('div', { class: 'row row--between' },
+          h('a', { href: `${base}/teams/${x.id}` }, x.name),
+          h('span', { class: 'row' }, x.reasons.map((r) => badge(t(`dash.reason.${r}`), r === 'no_mentor' ? '' : 'warn'))))))
+          : h('p', { class: 'notice notice--ok' }, t('dash.noRisk')))),
+    h('div', { class: 'grid-2' },
+      h('section', { class: 'card stack-sm' },
+        h('h2', null, t('dash.teamProgress')),
+        d.teams.length ? h('div', { class: 'stack-sm' }, d.teams.map((x) => h('div', null,
+          h('div', { class: 'row row--between small' }, h('a', { href: `${base}/teams/${x.id}` }, x.name),
+            h('span', { class: 'muted' }, t('dash.membersOf', { n: x.members, min: d.minTeamSize }))),
+          d.milestonesTotal ? progressBar(x.milestonesDone, d.milestonesTotal) : null)))
+          : emptyState(t('teams.none')),
+        !d.milestonesTotal ? h('p', { class: 'small muted' }, t('dash.noMilestones'), ' ', h('a', { href: `${base}/admin/milestones` }, t('admin.tab.milestones'))) : null),
+      h('div', { class: 'stack' },
+        d.tracks.length ? h('section', { class: 'card stack-sm' },
+          h('h2', null, t('overview.tracks')),
+          h('div', { class: 'table-wrap' }, h('table', null,
+            h('thead', null, h('tr', null, h('th', null, t('idea.track')), h('th', { class: 'num' }, t('stats.ideas')), h('th', { class: 'num' }, t('stats.teams')))),
+            h('tbody', null, d.tracks.map((tr) => h('tr', null, h('td', null, pick(tr, 'name')), h('td', { class: 'num' }, tr.ideas), h('td', { class: 'num' }, tr.teams))))))) : null,
+        h('section', { class: 'card stack-sm' },
+          h('h2', null, t('dash.reviews')),
+          d.rounds.length ? h('div', { class: 'table-wrap' }, h('table', null,
+            h('thead', null, h('tr', null, h('th', null, t('admin.tab.rounds')), h('th', null, t('common.status')), h('th', { class: 'num' }, t('dash.evaluations')), h('th', { class: 'num' }, t('dash.advanced')))),
+            h('tbody', null, d.rounds.map((r) => h('tr', null,
+              h('td', null, h('a', { href: `${base}/admin/rounds/${r.id}` }, pick(r, 'name'))),
+              h('td', null, roundBadge(r.status)),
+              h('td', { class: 'num' }, r.evaluations),
+              h('td', { class: 'num' }, `${r.advanced}/${r.decided}`))))))
+            : h('p', { class: 'muted small' }, t('reviews.noneAdmin'))))));
+}
+
+// ---------------------------------------------------------------- milestones
+async function milestonesTab(ctx) {
+  const { milestones } = await api.get(`/hackathons/${ctx.h.id}/milestones`);
+  const form = submitForm(h('form', { class: 'form card' },
+    h('h2', null, t('milestones.add')),
+    h('div', { class: 'grid-2' },
+      field(t('admin.titleEn'), input('titleEn', '', { required: true })),
+      field(t('admin.titleAr'), input('titleAr', '', { dir: 'rtl', lang: 'ar' })),
+      field(t('admin.descriptionEn'), textarea('descriptionEn', '')),
+      field(t('admin.descriptionAr'), textarea('descriptionAr', '', { dir: 'rtl', lang: 'ar' })),
+      field(t('milestones.due'), dateInput('dueAt'))),
+    h('div', { class: 'form-actions' }, h('button', { class: 'btn', type: 'submit' }, t('milestones.add')))), async (v) => {
+    await api.post(`/hackathons/${ctx.h.id}/milestones`, { ...v, dueAt: fromLocalInput(v.dueAt), sortOrder: milestones.length });
+    refresh();
+  });
+  return h('div', { class: 'grid-2' },
+    h('section', { class: 'card stack-sm' },
+      h('h2', null, t('milestones.title')),
+      h('p', { class: 'small muted' }, t('milestones.adminLead')),
+      milestones.length ? h('ol', { class: 'stack-sm' }, milestones.map((m) => h('li', null,
+        h('div', { class: 'row row--between' },
+          h('strong', null, pick(m, 'title')),
+          h('button', {
+            class: 'btn btn--ghost btn--small',
+            onclick: async (e) => {
+              if (!(await confirmDialog(t('common.deleteConfirm'), { danger: true }))) return;
+              busy(e.target, async () => { await api.del(`/milestones/${m.id}`); refresh(); });
+            },
+          }, t('common.delete'))),
+        h('div', { class: 'small muted' }, pick(m, 'description')),
+        h('div', { class: 'small' }, m.dueAt ? `${t('milestones.due')} ${fmtDate(m.dueAt)} · ` : '', t('milestones.teamsDone', { n: m.teamsDone })))))
+        : h('div', { class: 'stack-sm' },
+          emptyState(t('milestones.none')),
+          h('button', {
+            class: 'btn',
+            onclick: (e) => busy(e.target, async () => { await api.post(`/hackathons/${ctx.h.id}/milestones/template`); toast(t('milestones.templateAdded')); refresh(); }),
+          }, t('milestones.useTemplate')))),
+    form);
+}
 
 // ---------------------------------------------------------------- settings
 function settingsTab(ctx) {
@@ -262,11 +362,13 @@ export async function auditTable(query) {
       h('td', { class: 'small pre' }, Object.keys(e.details || {}).length ? JSON.stringify(e.details) : ''))))));
 }
 
-export async function adminHackathonView({ slug, tab = 'settings' }) {
+export async function adminHackathonView({ slug, tab = 'dashboard' }) {
   const ctx = await hackCtx(slug);
   if (!ctx.admin) return shell(ctx, 'admin', h('div', { class: 'notice notice--danger' }, t('error.ADMIN_ONLY')));
-  if (!TABS.includes(tab)) tab = 'settings';
+  if (!TABS.includes(tab)) tab = 'dashboard';
   const views = {
+    dashboard: () => dashboardTab(ctx),
+    milestones: () => milestonesTab(ctx),
     settings: () => settingsTab(ctx),
     timeline: () => timelineTab(ctx),
     announcements: () => announcementsTab(ctx),

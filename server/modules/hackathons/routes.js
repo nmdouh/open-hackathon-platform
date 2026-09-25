@@ -5,6 +5,7 @@ const { z, parse, text, requiredText, isoDate, idParam } = require('../../lib/ht
 const { notFound, badRequest, fromPg } = require('../../lib/errors');
 const { requireAdmin, isAdmin } = require('../../auth/sessions');
 const { audit } = require('../../lib/audit');
+const { notify, hackathonAudience } = require('../../lib/notify');
 const { toApi } = require('../../lib/shape');
 const { tx } = require('../../db/pool');
 const { loadHackathon, registrationOpen, ideaSubmissionOpen, teamingOpen } = require('./service');
@@ -224,6 +225,11 @@ module.exports = function hackathonRoutes({ pool }) {
       [id, b.titleEn, b.titleAr, b.bodyEn, b.bodyAr, b.pinned, req.user.id],
     );
     await audit(pool, { actorId: req.user.id, hackathonId: id, action: 'announcement.created', entityType: 'announcement', entityId: rows[0].id });
+    const h = await loadHackathon(pool, id, req.user);
+    await notify(pool, await hackathonAudience(pool, id), {
+      hackathonId: id, kind: 'announcement', link: `h/${h.slug}`,
+      data: { titleEn: b.titleEn, titleAr: b.titleAr },
+    });
     res.status(201).json({ announcement: toApi(rows[0]) });
   });
 

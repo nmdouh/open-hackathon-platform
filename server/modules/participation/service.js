@@ -2,6 +2,7 @@
 
 const { tx } = require('../../db/pool');
 const { audit } = require('../../lib/audit');
+const { notify } = require('../../lib/notify');
 const { badRequest, forbidden, notFound, conflict, fromPg } = require('../../lib/errors');
 const { isAdmin } = require('../../auth/sessions');
 const {
@@ -132,8 +133,10 @@ async function myState(pool, user, hackathonRef) {
   const idea = await liveIdeaOf(pool, h.id, user.id);
   const membership = await membershipOf(pool, h.id, user.id);
   const { rows: applications } = await pool.query(
-    `SELECT a.*, t.name AS team_name FROM applications a JOIN teams t ON t.id = a.team_id
-      WHERE a.hackathon_id = $1 AND a.user_id = $2 ORDER BY a.created_at DESC`,
+    `SELECT a.*, t.name AS team_name, i.title AS idea_title, iu.display_name AS invited_by_name
+       FROM applications a JOIN teams t ON t.id = a.team_id JOIN ideas i ON i.id = t.idea_id
+       LEFT JOIN users iu ON iu.id = a.invited_by
+      WHERE a.hackathon_id = $1 AND a.user_id = $2 ORDER BY (a.status = 'pending') DESC, a.created_at DESC`,
     [h.id, user.id],
   );
   return { hackathon: h, registration, idea, membership, applications };
@@ -256,7 +259,14 @@ async function withdrawIdea(pool, user, ideaId) {
 
 async function canSeeHackathonContent(db, user, hackathonId) {
   if (isAdmin(user)) return true;
-  return Boolean(await activeRegistration(db, hackathonId, user.id));
+  const { rows } = await db.query(
+    `SELECT EXISTS (SELECT 1 FROM registrations WHERE hackathon_id = $1 AND user_id = $2 AND status = 'active')
+         OR EXISTS (SELECT 1 FROM mentors WHERE hackathon_id = $1 AND user_id = $2)
+         OR EXISTS (SELECT 1 FROM round_reviewers v JOIN review_rounds r ON r.id = v.round_id
+                     WHERE r.hackathon_id = $1 AND v.user_id = $2) AS ok`,
+    [hackathonId, user.id],
+  );
+  return rows[0].ok;
 }
 
 // Participants see every submitted idea (so members can pick a team);
@@ -383,7 +393,9 @@ async function listTeams(pool, user, hackathonRef) {
             u.display_name AS owner_name,
             (SELECT count(*)::int FROM team_members m WHERE m.team_id = t.id) AS member_count,
             (SELECT a.status FROM applications a WHERE a.team_id = t.id AND a.user_id = $2
-              ORDER BY a.created_at DESC LIMIT 1) AS my_application_status
+              ORDER BY a.created_at DESC LIMIT 1) AS my_application_status,
+            (SELECT count(*)::int FROM team_milestones tm WHERE tm.team_id = t.id) AS milestones_done,
+            (SELECT count(*)::int FROM milestones ms WHERE ms.hackathon_id = t.hackathon_id) AS milestones_total
        FROM teams t
        JOIN ideas i ON i.id = t.idea_id
        JOIN users u ON u.id = t.owner_id
@@ -433,7 +445,7 @@ async function apply(pool, user, teamId, { message = '' }) {
     if (!team.is_open) throw conflict('TEAM_CLOSED');
     if ((await teamSize(db, team.id)) >= h.max_team_size) throw conflict('TEAM_FULL');
     const { rows: pending } = await db.query(
-      "SELECT count(*)::int AS n FROM applications WHERE hackathon_id = $1 AND user_id = $2 AND status = 'pending'",
+      "SELECT count(*)::int AS n FROM applications WHERE hackathon_id = $1 AND user_id = $2 AND status = 'pending' AND direction = 'apply'",
       [h.id, user.id],
     );
     if (pending[0].n >= h.max_pending_applications) throw conflict('TOO_MANY_PENDING_APPLICATIONS');
@@ -443,6 +455,39 @@ async function apply(pool, user, teamId, { message = '' }) {
       [team.id, h.id, user.id, message],
     );
     await audit(db, { actorId: user.id, hackathonId: h.id, action: 'application.created', entityType: 'application', entityId: rows[0].id, details: { teamId: team.id } });
+    await notify(db, team.owner_id, {
+      hackathonId: h.id, kind: 'application.received', link: `h/${h.slug}/teams/${team.id}`,
+      data: { teamName: team.name, personName: user.display_name },
+    });
+    return rows[0];
+  });
+}
+
+// A team owner invites a registered member who has no team yet. The invitee
+// accepts or declines; all the usual team rules apply on acceptance.
+async function invite(pool, user, teamId, { userId, message = '' }) {
+  return run(pool, async (db) => {
+    const { rows: pre } = await db.query('SELECT hackathon_id FROM teams WHERE id = $1', [teamId]);
+    if (!pre[0]) throw notFound('TEAM_NOT_FOUND');
+    const h = await loadHackathon(db, pre[0].hackathon_id, user);
+    assertTeamingOpen(h);
+    await lockParticipant(db, h.id, userId);
+    const team = await lockTeam(db, teamId);
+    assertTeamManager(user, team);
+    const reg = await activeRegistration(db, h.id, userId);
+    if (!reg || reg.role !== 'member') throw conflict('INVITEE_NOT_ELIGIBLE');
+    if (await membershipOf(db, h.id, userId)) throw conflict('ALREADY_IN_TEAM');
+    if ((await teamSize(db, team.id)) >= h.max_team_size) throw conflict('TEAM_FULL');
+    const { rows } = await db.query(
+      `INSERT INTO applications (team_id, hackathon_id, user_id, message, direction, invited_by)
+       VALUES ($1, $2, $3, $4, 'invite', $5) RETURNING *`,
+      [team.id, h.id, userId, message, user.id],
+    );
+    await audit(db, { actorId: user.id, hackathonId: h.id, action: 'invitation.created', entityType: 'application', entityId: rows[0].id, details: { teamId: team.id, personId: userId } });
+    await notify(db, userId, {
+      hackathonId: h.id, kind: 'invitation.received', link: `h/${h.slug}/me`,
+      data: { teamName: team.name, personName: user.display_name },
+    });
     return rows[0];
   });
 }
@@ -462,7 +507,12 @@ async function decide(pool, user, applicationId, decision) {
       await lockParticipant(db, h.id, pre.user_id);
     }
     const team = await lockTeam(db, pre.team_id);
-    assertTeamManager(user, team);
+    // An application is answered by the team; an invitation by the invitee.
+    if (pre.direction === 'invite') {
+      if (pre.user_id !== user.id) throw forbidden('NOT_YOUR_INVITATION');
+    } else {
+      assertTeamManager(user, team);
+    }
     const app = await loadApplication(db, applicationId);
     if (app.status !== 'pending') throw conflict('APPLICATION_NOT_PENDING');
 
@@ -486,7 +536,22 @@ async function decide(pool, user, applicationId, decision) {
       'UPDATE applications SET status = $2, decided_by = $3, decided_at = now() WHERE id = $1 RETURNING *',
       [app.id, decision, user.id],
     );
-    await audit(db, { actorId: user.id, hackathonId: h.id, action: `application.${decision}`, entityType: 'application', entityId: app.id, details: { teamId: team.id, applicantId: app.user_id } });
+    await audit(db, {
+      actorId: user.id, hackathonId: h.id, action: `${app.direction === 'invite' ? 'invitation' : 'application'}.${decision}`,
+      entityType: 'application', entityId: app.id, details: { teamId: team.id, personId: app.user_id },
+    });
+    if (app.direction === 'invite') {
+      await notify(db, team.owner_id, {
+        hackathonId: h.id, kind: `invitation.${decision}`, link: `h/${h.slug}/teams/${team.id}`,
+        data: { teamName: team.name, personName: user.display_name },
+      });
+    } else {
+      await notify(db, app.user_id, {
+        hackathonId: h.id, kind: `application.${decision}`,
+        link: decision === 'accepted' ? `h/${h.slug}/teams/${team.id}` : `h/${h.slug}/teams`,
+        data: { teamName: team.name },
+      });
+    }
     return rows[0];
   });
 }
@@ -494,14 +559,19 @@ async function decide(pool, user, applicationId, decision) {
 async function withdrawApplication(pool, user, applicationId) {
   return run(pool, async (db) => {
     const pre = await loadApplication(db, applicationId);
-    if (pre.user_id !== user.id) throw forbidden('NOT_YOUR_APPLICATION');
-    await lockParticipant(db, pre.hackathon_id, user.id);
+    if (pre.direction === 'invite') {
+      const { rows: t } = await db.query('SELECT * FROM teams WHERE id = $1', [pre.team_id]);
+      assertTeamManager(user, t[0]);
+    } else if (pre.user_id !== user.id) {
+      throw forbidden('NOT_YOUR_APPLICATION');
+    }
+    await lockParticipant(db, pre.hackathon_id, pre.user_id);
     const { rows } = await db.query(
       "UPDATE applications SET status = 'withdrawn', decided_at = now() WHERE id = $1 AND status = 'pending' RETURNING *",
       [pre.id],
     );
     if (!rows[0]) throw conflict('APPLICATION_NOT_PENDING');
-    await audit(db, { actorId: user.id, hackathonId: pre.hackathon_id, action: 'application.withdrawn', entityType: 'application', entityId: pre.id });
+    await audit(db, { actorId: user.id, hackathonId: pre.hackathon_id, action: `${pre.direction === 'invite' ? 'invitation' : 'application'}.withdrawn`, entityType: 'application', entityId: pre.id });
     return rows[0];
   });
 }
@@ -567,6 +637,6 @@ module.exports = {
   register, updateRegistration, withdrawRegistration, myState,
   createIdea, updateIdea, submitIdea, withdrawIdea, listIdeas, getIdea,
   createTeam, updateTeam, disbandTeam, listTeams, getTeam,
-  apply, decide, withdrawApplication, teamApplications, removeMember,
+  apply, invite, decide, withdrawApplication, teamApplications, removeMember,
   participants, activeRegistration, lockParticipant,
 };

@@ -2,6 +2,7 @@
 export const state = {
   config: null,
   user: null,
+  unread: 0,
 };
 
 export const isAdmin = () => Boolean(state.user && state.user.role === 'admin');

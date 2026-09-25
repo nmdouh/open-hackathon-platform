@@ -126,6 +126,11 @@ module.exports = function participationRoutes({ pool }) {
     res.status(201).json({ application: toApi(await svc.apply(pool, req.user, idParam(req), b)) });
   });
 
+  r.post('/teams/:id/invitations', async (req, res) => {
+    const b = parse(z.object({ userId: uuid, message: text(2000).default('') }), req.body);
+    res.status(201).json({ invitation: toApi(await svc.invite(pool, req.user, idParam(req), b)) });
+  });
+
   r.post('/applications/:id/accept', async (req, res) => {
     res.json({ application: toApi(await svc.decide(pool, req.user, idParam(req), 'accepted')) });
   });

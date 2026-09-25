@@ -31,6 +31,7 @@ function createApp({ pool, config, logger = console }) {
   });
   app.use('/api/auth', require('./modules/auth/routes')(ctx));
   app.use('/api', require('./modules/hackathons/routes')(ctx));
+  app.use('/api', require('./modules/engagement/routes')(ctx));
   app.use('/api/admin', require('./modules/admin/routes')(ctx));
   app.use('/api', require('./modules/governance/routes')(ctx));
   app.use('/api', require('./modules/mentoring/routes')(ctx));

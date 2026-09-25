@@ -2,6 +2,7 @@
 
 const { tx } = require('../../db/pool');
 const { audit } = require('../../lib/audit');
+const { notify, hackathonAudience } = require('../../lib/notify');
 const { HttpError, badRequest, forbidden, notFound, conflict, fromPg } = require('../../lib/errors');
 const { isAdmin } = require('../../auth/sessions');
 const { loadHackathon } = require('../hackathons/service');
@@ -289,6 +290,14 @@ async function transition(pool, user, roundId, action) {
     const { rows } = await db.query(`UPDATE review_rounds SET status = $2, ${stamp} = now() WHERE id = $1 RETURNING *`, [round.id, next]);
     const name = next === 'closed' ? 'round.closed' : round.status === 'closed' ? 'round.reopened' : 'round.opened';
     await audit(db, { actorId: user.id, hackathonId: round.hackathon_id, action: name, entityType: 'round', entityId: round.id });
+    if (next === 'open') {
+      const { rows: rv } = await db.query('SELECT user_id FROM round_reviewers WHERE round_id = $1', [round.id]);
+      const { rows: hs } = await db.query('SELECT slug FROM hackathons WHERE id = $1', [round.hackathon_id]);
+      await notify(db, rv.map((x) => x.user_id), {
+        hackathonId: round.hackathon_id, kind: 'round.opened', link: `h/${hs[0].slug}/reviews/${round.id}`,
+        data: { nameEn: round.name_en, nameAr: round.name_ar },
+      });
+    }
     return rows[0];
   });
 }
@@ -299,6 +308,13 @@ async function publishResults(pool, user, roundId, published) {
     assertStatus(round, ['finalized'], 'ROUND_NOT_FINALIZED');
     const { rows } = await db.query('UPDATE review_rounds SET results_published = $2 WHERE id = $1 RETURNING *', [round.id, published]);
     await audit(db, { actorId: user.id, hackathonId: round.hackathon_id, action: published ? 'round.results_published' : 'round.results_unpublished', entityType: 'round', entityId: round.id });
+    if (published && !round.results_published) {
+      const { rows: hs } = await db.query('SELECT slug FROM hackathons WHERE id = $1', [round.hackathon_id]);
+      await notify(db, await hackathonAudience(db, round.hackathon_id), {
+        hackathonId: round.hackathon_id, kind: 'results.published', link: `h/${hs[0].slug}`,
+        data: { nameEn: round.name_en, nameAr: round.name_ar },
+      });
+    }
     return rows[0];
   });
 }

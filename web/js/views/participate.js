@@ -1,8 +1,9 @@
 import { api, enc } from '../api.js';
 import { t } from '../i18n.js';
-import { h, field, busy, toast, formValues, splitList, badge, confirmDialog, fmtDate, pick } from '../ui.js';
+import { h, field, busy, toast, formValues, splitList, badge, confirmDialog, fmtDate, pick, person, avatar, progressBar, emptyState } from '../ui.js';
 import { refresh } from '../app.js';
-import { hackCtx, shell } from './shell.js';
+import { hackCtx, shell, trackName } from './shell.js';
+import { journeyData, journey, stepperView, nextStepCard } from './journey.js';
 
 function registerForm(ctx) {
   const form = h('form', { class: 'form card' },
@@ -116,7 +117,7 @@ function ownerSection(ctx) {
 }
 
 function memberSection(ctx) {
-  const apps = ctx.me.applications;
+  const apps = ctx.me.applications.filter((a) => a.direction !== 'invite');
   return h('section', { class: 'card stack-sm' },
     h('h2', null, t('me.yourApplications')),
     !ctx.teamId ? h('p', null, h('a', { class: 'btn btn--secondary btn--small', href: `#/h/${enc(ctx.slug)}/teams` }, t('me.browseTeams'))) : null,
@@ -141,12 +142,88 @@ export async function participateView({ slug }) {
       : h('div', { class: 'notice notice--warn' }, t('overview.registrationClosed')));
   }
   const role = ctx.me.registration.role;
+  const [jd, matches] = await Promise.all([
+    journeyData(ctx),
+    api.get(`/hackathons/${ctx.h.id}/matches`),
+  ]);
+  const j = journey(ctx, jd);
   return shell(ctx, 'me',
+    stepperView(j),
+    nextStepCard(j.next),
     h('div', { class: 'grid-2' },
       h('div', { class: 'stack' },
-        ctx.teamId ? h('div', { class: 'notice notice--ok row row--between' },
-          h('span', null, t('me.inTeam')),
-          h('a', { class: 'btn btn--small', href: `#/h/${enc(slug)}/teams/${ctx.teamId}` }, t('me.openTeam'))) : null,
+        invitationsCard(ctx),
+        ctx.teamId ? teamProgressCard(ctx, jd, j) : null,
+        matchesCard(ctx, matches),
         role === 'idea_owner' ? ownerSection(ctx) : memberSection(ctx)),
       h('div', { class: 'stack' }, registrationCard(ctx))));
+}
+
+// Invitations from teams, answered by the person invited.
+function invitationsCard(ctx) {
+  const invites = ctx.me.applications.filter((a) => a.direction === 'invite' && a.status === 'pending');
+  if (!invites.length || ctx.teamId) return null;
+  return h('section', { class: 'card stack-sm' },
+    h('h2', null, t('me.invitations')),
+    invites.map((a) => h('div', { class: 'card card--flat stack-sm' },
+      h('div', { class: 'row row--between' },
+        h('div', null, h('strong', null, a.teamName), h('div', { class: 'small muted' }, a.ideaTitle)),
+        a.invitedByName ? person(a.invitedByName, t('me.invitedBy')) : null),
+      a.message ? h('p', { class: 'pre' }, a.message) : null,
+      h('div', { class: 'form-actions' },
+        h('button', { class: 'btn btn--small', onclick: (e) => busy(e.target, async () => { await api.post(`/applications/${a.id}/accept`); toast(t('me.joined')); refresh(); }) }, t('me.acceptInvite')),
+        h('button', { class: 'btn btn--ghost btn--small', onclick: (e) => busy(e.target, async () => { await api.post(`/applications/${a.id}/reject`); refresh(); }) }, t('me.declineInvite')),
+        h('a', { class: 'btn btn--ghost btn--small', href: `#/h/${enc(ctx.slug)}/teams/${a.teamId}` }, t('common.open'))))));
+}
+
+function teamProgressCard(ctx, jd, j) {
+  return h('section', { class: 'card stack-sm' },
+    h('div', { class: 'row row--between' },
+      h('h2', null, jd.team ? jd.team.name : t('me.inTeam')),
+      h('a', { class: 'btn btn--small', href: `#/h/${enc(ctx.slug)}/teams/${ctx.teamId}` }, t('me.openTeam'))),
+    h('div', { class: 'avatars' }, jd.members.map((m) => avatar(m.displayName))),
+    j.msTotal ? progressBar(j.msDone, j.msTotal, t('milestones.progress')) : h('p', { class: 'small muted' }, t('milestones.none')));
+}
+
+// Suggested teams for members, suggested people for team owners.
+function matchesCard(ctx, m) {
+  if (m.mode === 'teams') {
+    return h('section', { class: 'card stack-sm' },
+      h('h2', null, t('match.teamsTitle')),
+      h('p', { class: 'small muted' }, (ctx.me.registration.skills || []).length ? t('match.teamsLead') : t('match.addSkills')),
+      m.teams.length ? m.teams.map((x) => h('div', { class: 'card card--flat stack-sm' },
+        h('div', { class: 'row row--between' },
+          h('a', { href: `#/h/${enc(ctx.slug)}/teams/${x.id}` }, h('strong', null, x.name)),
+          h('span', { class: 'small muted' }, t('team.members', { n: x.memberCount, max: x.capacity }))),
+        h('div', { class: 'small muted' }, x.ideaTitle, trackName(x) ? ` · ${trackName(x)}` : ''),
+        x.matched.length ? h('div', { class: 'chips' }, h('span', { class: 'small' }, t('match.because')), x.matched.map((s) => h('span', { class: 'chip chip--match' }, s))) : null,
+        x.lookingFor ? h('p', { class: 'small pre' }, h('strong', null, t('team.lookingFor'), ': '), x.lookingFor) : null,
+        h('div', null, h('button', {
+          class: 'btn btn--small',
+          onclick: async (e) => {
+            const message = await confirmDialog(t('team.applyPrompt', { name: x.name }), { okLabel: t('team.apply'), withNote: true, notePlaceholder: t('team.applyMessage') });
+            if (message === null) return;
+            busy(e.target, async () => { await api.post(`/teams/${x.id}/applications`, { message }); toast(t('team.applied')); refresh(); });
+          },
+        }, t('team.apply'))))) : emptyState(t('match.noTeams')));
+  }
+  if (m.mode === 'people') {
+    return h('section', { class: 'card stack-sm' },
+      h('h2', null, t('match.peopleTitle')),
+      h('p', { class: 'small muted' }, t('match.peopleLead')),
+      m.people.length ? m.people.map((p) => h('div', { class: 'card card--flat stack-sm' },
+        h('div', { class: 'row row--between' },
+          person(p.displayName, (p.skills || []).join(', ')),
+          h('button', {
+            class: 'btn btn--small',
+            onclick: async (e) => {
+              const message = await confirmDialog(t('match.invitePrompt', { name: p.displayName }), { okLabel: t('match.invite'), withNote: true, notePlaceholder: t('match.inviteMessage') });
+              if (message === null) return;
+              busy(e.target, async () => { await api.post(`/teams/${m.teamId}/invitations`, { userId: p.userId, message }); toast(t('match.invited')); refresh(); });
+            },
+          }, t('match.invite'))),
+        p.matched.length ? h('div', { class: 'chips' }, h('span', { class: 'small' }, t('match.because')), p.matched.map((s) => h('span', { class: 'chip chip--match' }, s))) : null,
+        p.bio ? h('p', { class: 'small muted pre' }, p.bio) : null)) : emptyState(t('match.noPeople')));
+  }
+  return null;
 }

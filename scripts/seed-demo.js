@@ -11,6 +11,7 @@ const p = require('../server/modules/participation/service');
 const g = require('../server/modules/governance/service');
 const m = require('../server/modules/mentoring/service');
 const tb = require('../server/modules/toolbox/service');
+const en = require('../server/modules/engagement/service');
 
 const DEMO_PASSWORD = 'demo-password-2026';
 const SLUG = 'open-innovation-2026';
@@ -49,7 +50,7 @@ async function seedDemo(databaseUrl) {
     for (const [email, name, role = 'user'] of PEOPLE) {
       const { rows } = await pool.query(
         `INSERT INTO users (email, display_name, password_hash, role) VALUES ($1, $2, $3, $4)
-         ON CONFLICT (lower(email)) DO UPDATE SET display_name = EXCLUDED.display_name RETURNING id, role`,
+         ON CONFLICT (lower(email)) DO UPDATE SET display_name = EXCLUDED.display_name RETURNING id, role, display_name`,
         [email, name, hash, role],
       );
       users[email] = rows[0];
@@ -116,6 +117,16 @@ async function seedDemo(databaseUrl) {
     await join('mei@example.org', teams[0]);
     await join('noura@example.org', teams[1]);
     await p.apply(pool, u('david@example.org'), teams[2].team.id, { message: 'Backend developer, free every evening.' });
+    await p.invite(pool, u('sara@example.org'), teams[2].team.id, { userId: users['amina@example.org'].id, message: 'We need a tester who asks hard questions.' });
+
+    await en.applyMilestoneTemplate(pool, admin, h.id);
+    const { rows: ms } = await pool.query('SELECT id FROM milestones WHERE hackathon_id = $1 ORDER BY sort_order', [h.id]);
+    await pool.query('UPDATE milestones SET due_at = $2 WHERE id = $1', [ms[0].id, at(1)]);
+    for (const [teamIndex, count] of [[0, 3], [1, 1]]) {
+      for (const m of ms.slice(0, count)) {
+        await en.setTeamMilestone(pool, u(teams[teamIndex].owner), teams[teamIndex].team.id, m.id, { done: true, evidenceUrl: '' });
+      }
+    }
 
     await m.addMentor(pool, admin, h.id, { email: 'mentor@example.org', expertise: ['product', 'data'], maxTeams: 3 });
     const req = await m.createRequest(pool, u('layla@example.org'), teams[0].team.id, { topic: 'Choosing a forecasting model', details: 'We have two years of hourly visits.' });

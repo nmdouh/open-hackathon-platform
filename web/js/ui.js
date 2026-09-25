@@ -157,3 +157,34 @@ export function formValues(form) {
 export function splitList(text) {
   return String(text || '').split(/[,،\n]/).map((s) => s.trim()).filter(Boolean);
 }
+
+// ---- avatars and progress ----
+const AVATAR_COLOURS = ['#3b5bdb', '#7048e8', '#0c8599', '#2b8a3e', '#e8590c', '#c2255c', '#5f3dc4', '#1971c2'];
+
+export function initials(name) {
+  const parts = String(name || '?').trim().split(/\s+/).filter(Boolean);
+  const letters = parts.length > 1 ? [parts[0], parts[parts.length - 1]] : parts;
+  return letters.map((p) => Array.from(p)[0]).join('').toUpperCase() || '?';
+}
+
+export function avatar(name, small = false) {
+  let hash = 0;
+  for (const ch of String(name || '')) hash = (hash * 31 + ch.codePointAt(0)) >>> 0;
+  const el = h('span', { class: `avatar${small ? ' avatar--sm' : ''}`, 'aria-hidden': 'true', title: name }, initials(name));
+  el.style.background = AVATAR_COLOURS[hash % AVATAR_COLOURS.length];
+  return el;
+}
+
+export function person(name, sub) {
+  return h('span', { class: 'person' }, avatar(name),
+    h('span', null, h('span', { class: 'person__name' }, name), sub ? h('div', { class: 'small muted' }, sub) : null));
+}
+
+export function progressBar(done, total, label) {
+  const pct = total ? Math.round((done / total) * 100) : 0;
+  const bar = h('i');
+  bar.style.width = `${pct}%`;
+  return h('div', null,
+    label ? h('div', { class: 'progress-label' }, h('span', null, label), h('span', null, `${done}/${total}`)) : null,
+    h('div', { class: 'progress', role: 'progressbar', 'aria-valuemin': 0, 'aria-valuemax': total, 'aria-valuenow': done, 'aria-label': label || `${pct}%` }, bar));
+}

@@ -1,6 +1,6 @@
 {
   "name": "open-hackathon-platform",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Open-source platform for running innovation hackathons: registration, idea submission, team formation, screening, mentoring, reviews and judging. Bilingual (English/Arabic, RTL).",
   "license": "Apache-2.0",
   "private": true,

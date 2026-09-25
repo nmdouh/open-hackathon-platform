@@ -2,6 +2,12 @@
 
 const { tx } = require('../../db/pool');
 const { audit } = require('../../lib/audit');
+const { notify, teamMemberIds } = require('../../lib/notify');
+
+async function slugOf(db, hackathonId) {
+  const { rows } = await db.query('SELECT slug FROM hackathons WHERE id = $1', [hackathonId]);
+  return rows[0].slug;
+}
 const { badRequest, forbidden, notFound, conflict, fromPg } = require('../../lib/errors');
 const { isAdmin } = require('../../auth/sessions');
 const { loadHackathon } = require('../hackathons/service');
@@ -95,6 +101,13 @@ async function assignLocked(db, actor, hackathonId, teamId, mentorId) {
     [teamId, mentorId, hackathonId, actor.id],
   );
   await audit(db, { actorId: actor.id, hackathonId, action: 'mentor.assigned', entityType: 'team', entityId: teamId, details: { mentorId } });
+  if (actor.id !== mentorId) {
+    const { rows: t } = await db.query('SELECT name FROM teams WHERE id = $1', [teamId]);
+    await notify(db, mentorId, {
+      hackathonId, kind: 'mentor.assigned', link: `h/${await slugOf(db, hackathonId)}/teams/${teamId}`,
+      data: { teamName: t[0].name },
+    });
+  }
   return true;
 }
 
@@ -132,6 +145,15 @@ async function createRequest(pool, user, teamId, { topic, details = '', mentorId
       [team.hackathon_id, team.id, user.id, mentorId, topic, details],
     );
     await audit(db, { actorId: user.id, hackathonId: team.hackathon_id, action: 'mentoring.requested', entityType: 'mentoring_request', entityId: rows[0].id });
+    let recipients = mentorId ? [mentorId] : [];
+    if (!mentorId) {
+      const { rows: all } = await db.query('SELECT user_id FROM mentors WHERE hackathon_id = $1', [team.hackathon_id]);
+      recipients = all.map((m) => m.user_id);
+    }
+    await notify(db, recipients, {
+      hackathonId: team.hackathon_id, kind: 'mentoring.requested', link: `h/${await slugOf(db, team.hackathon_id)}/mentoring`,
+      data: { teamName: team.name, topic },
+    });
     return rows[0];
   });
 }
@@ -170,6 +192,13 @@ async function mentorAction(pool, user, requestId, action, { scheduledAt, notes 
       throw badRequest('UNKNOWN_ACTION');
     }
     await audit(db, { actorId: user.id, hackathonId: req.hackathon_id, action: `mentoring.${action}`, entityType: 'mentoring_request', entityId: req.id });
+    if (action === 'accept' || action === 'complete') {
+      await notify(db, await teamMemberIds(db, req.team_id), {
+        hackathonId: req.hackathon_id, kind: action === 'accept' ? 'mentoring.accepted' : 'mentoring.done',
+        link: `h/${await slugOf(db, req.hackathon_id)}/mentoring`,
+        data: { topic: req.topic, personName: user.display_name },
+      });
+    }
     const { rows } = await db.query('SELECT * FROM mentoring_requests WHERE id = $1', [req.id]);
     return rows[0];
   });
