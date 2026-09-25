@@ -1,0 +1,35 @@
+{
+  "name": "open-hackathon-platform",
+  "version": "0.1.0",
+  "description": "Open-source platform for running innovation hackathons: registration, idea submission, team formation, screening, mentoring, reviews and judging. Bilingual (English/Arabic, RTL).",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "server/index.js",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node scripts/dev.js",
+    "migrate": "node scripts/migrate.js",
+    "create-admin": "node scripts/create-admin.js",
+    "test": "node --test --test-concurrency=1 --test-global-setup=test/global-setup.js \"test/**/*.test.js\""
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "pg": "^8.23.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "embedded-postgres": "^17.2.0-beta.15"
+  },
+  "keywords": [
+    "hackathon",
+    "innovation",
+    "judging",
+    "open-source",
+    "arabic",
+    "rtl"
+  ]
+}
