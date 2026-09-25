@@ -6,6 +6,7 @@ const { forbidden, notFound, HttpError } = require('../../lib/errors');
 const { isAdmin } = require('../../auth/sessions');
 const { loadHackathon, teamingOpen } = require('../hackathons/service');
 const { chat, extractJson } = require('../../lib/llm');
+const { effectiveLlm } = require('../../lib/settings');
 const { TEMPLATES } = require('../governance/templates');
 
 // ------------------------------------------------------------------ who can see what
@@ -244,15 +245,17 @@ async function coach(pool, config, user, hackathonRef, { mode, text, locale }) {
   const h = await loadHackathon(pool, hackathonRef, user);
   const ctx = await viewerContext(pool, user, h.id);
   if (!ctx.canSeePublic) throw forbidden('NOT_REGISTERED');
+  const llm = await effectiveLlm(pool, config);
+  if (!llm.enabled || !llm.endpoint || !llm.model) throw new HttpError(503, 'AI_NOT_CONFIGURED', 'The AI coach is not configured');
   const { rows } = await pool.query(
     "SELECT count(*)::int AS n FROM ai_usage WHERE user_id = $1 AND created_at > now() - interval '24 hours'",
     [user.id],
   );
-  if (rows[0].n >= config.llm.dailyLimit) throw new HttpError(429, 'AI_DAILY_LIMIT', 'Daily AI limit reached');
+  if (rows[0].n >= llm.dailyLimit) throw new HttpError(429, 'AI_DAILY_LIMIT', 'Daily AI limit reached');
   const rubric = await rubricFor(pool, h.id, MODES[mode].rubric);
   let ok = false;
   try {
-    const content = await chat(config, buildMessages(mode, rubric, text, locale));
+    const content = await chat(llm, buildMessages(mode, rubric, text, locale));
     const parsed = extractJson(content);
     ok = true;
     return parsed ? { feedback: cleanFeedback(parsed, rubric), rubric } : { feedback: null, text: content.slice(0, 6000), rubric };

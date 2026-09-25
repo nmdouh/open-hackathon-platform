@@ -6,6 +6,7 @@ const { loadUser } = require('./auth/sessions');
 const { securityHeaders, csrfGuard } = require('./lib/security');
 const { HttpError, fromPg } = require('./lib/errors');
 const { llmEnabled } = require('./lib/llm');
+const { effectiveLlm } = require('./lib/settings');
 
 const WEB_ROOT = path.join(__dirname, '..', 'web');
 
@@ -24,8 +25,9 @@ function createApp({ pool, config, logger = console }) {
     await pool.query('SELECT 1');
     res.json({ ok: true });
   });
-  app.get('/api/config', (_req, res) => {
-    res.json({ appName: config.appName, allowSignup: config.allowSignup, aiEnabled: llmEnabled(config) });
+  app.get('/api/config', async (_req, res) => {
+    const llm = await effectiveLlm(pool, config);
+    res.json({ appName: config.appName, allowSignup: config.allowSignup, aiEnabled: llmEnabled(llm) });
   });
   app.use('/api/auth', require('./modules/auth/routes')(ctx));
   app.use('/api', require('./modules/hackathons/routes')(ctx));

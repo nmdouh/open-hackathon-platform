@@ -3,12 +3,27 @@
 const express = require('express');
 const { z, parse, uuid, idParam } = require('../../lib/http');
 const { requireAdmin } = require('../../auth/sessions');
-const { conflict, notFound } = require('../../lib/errors');
+const { conflict, notFound, HttpError } = require('../../lib/errors');
 const { audit } = require('../../lib/audit');
 const { toApi } = require('../../lib/shape');
 const { tx } = require('../../db/pool');
+const { effectiveLlm, publicView, saveLlm, resetLlm } = require('../../lib/settings');
+const { chat, llmEnabled } = require('../../lib/llm');
 
-module.exports = function adminRoutes({ pool }) {
+const llmSchema = z.object({
+  enabled: z.boolean(),
+  endpoint: z.union([
+    z.string().trim().max(500).regex(/^https?:\/\/[^\s]+$/i, 'Must be an http(s) URL'),
+    z.literal(''),
+  ]),
+  model: z.string().trim().max(200),
+  // undefined keeps the stored key, '' removes it.
+  apiKey: z.string().trim().max(1000).optional(),
+  dailyLimit: z.number().int().min(1).max(1000),
+  timeoutMs: z.number().int().min(5000).max(180000),
+});
+
+module.exports = function adminRoutes({ pool, config }) {
   const r = express.Router();
   r.use(requireAdmin);
 
@@ -47,6 +62,42 @@ module.exports = function adminRoutes({ pool }) {
       return rows[0];
     });
     res.json({ user: toApi(user) });
+  });
+
+  // ---- AI coach settings ----
+  r.get('/settings/llm', async (_req, res) => {
+    res.json({ llm: publicView(await effectiveLlm(pool, config), config) });
+  });
+
+  r.put('/settings/llm', async (req, res) => {
+    const b = parse(llmSchema, req.body);
+    if (b.enabled && (!b.endpoint || !b.model)) {
+      throw new HttpError(400, 'AI_SETTINGS_INCOMPLETE', 'Endpoint and model are required to enable the AI coach');
+    }
+    const llm = await saveLlm(pool, config, req.user.id, b);
+    // Never log the key itself; only whether it changed.
+    const { apiKey, ...rest } = b;
+    await audit(pool, {
+      actorId: req.user.id, action: 'settings.llm_updated', entityType: 'settings', entityId: 'llm',
+      details: { ...rest, apiKey: apiKey === undefined ? 'unchanged' : apiKey === '' ? 'removed' : 'replaced' },
+    });
+    res.json({ llm: publicView(llm, config) });
+  });
+
+  r.delete('/settings/llm', async (req, res) => {
+    await resetLlm(pool);
+    await audit(pool, { actorId: req.user.id, action: 'settings.llm_reset', entityType: 'settings', entityId: 'llm' });
+    res.json({ llm: publicView(await effectiveLlm(pool, config), config) });
+  });
+
+  // Sends a tiny prompt with the saved settings. Not counted in usage limits.
+  r.post('/settings/llm/test', async (_req, res) => {
+    const llm = await effectiveLlm(pool, config);
+    if (!llmEnabled({ ...llm, enabled: true })) throw new HttpError(400, 'AI_SETTINGS_INCOMPLETE', 'Endpoint and model are required');
+    const started = Date.now();
+    const reply = await chat({ ...llm, enabled: true, timeoutMs: Math.min(llm.timeoutMs || 45000, 30000) },
+      [{ role: 'user', content: 'Reply with the single word: OK' }], { temperature: 0, maxTokens: 10 });
+    res.json({ ok: true, latencyMs: Date.now() - started, reply: reply.trim().slice(0, 200) });
   });
 
   r.get('/audit', async (req, res) => {

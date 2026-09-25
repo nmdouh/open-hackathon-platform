@@ -24,6 +24,8 @@ function loadConfig(env = process.env) {
     sessionTtlHours: int(env.SESSION_TTL_HOURS, 12),
     cookieSecure: bool(env.COOKIE_SECURE, production),
     trustProxy: int(env.TRUST_PROXY, 0),
+    // Encrypts secrets that administrators store in the database (AI API key).
+    settingsSecret: env.SETTINGS_SECRET || '',
     // Attempts per IP (and per email for sign-in) before HTTP 429.
     authRateLimit: int(env.AUTH_RATE_LIMIT, 20),
     // Optional AI assistant (OpenAI-compatible chat completions endpoint).

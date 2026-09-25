@@ -57,7 +57,7 @@ npm test
 See **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**. In short, with Docker:
 
 ```bash
-cp .env.example .env        # set a strong POSTGRES_PASSWORD at least
+cp .env.example .env        # set POSTGRES_PASSWORD and SETTINGS_SECRET
 docker compose up -d
 docker compose exec app npm run create-admin -- --email you@your-institution.org --name "Your Name"
 ```
@@ -73,7 +73,8 @@ All settings are environment variables; see [`.env.example`](.env.example). High
 | `DATABASE_URL` | PostgreSQL connection string (database must be UTF-8) |
 | `APP_NAME` | Name shown in the header — put your institution's event name here |
 | `ALLOW_SIGNUP` | `false` to let only administrators create accounts |
-| `LLM_ENDPOINT`, `LLM_API_KEY`, `LLM_MODEL` | Optional AI coach. Any OpenAI-compatible chat completions endpoint, including self-hosted models (e.g. Ollama). The key stays on the server. |
+| `SETTINGS_SECRET` | Random secret that encrypts settings saved in the app, such as the AI coach API key |
+| `LLM_ENDPOINT`, `LLM_API_KEY`, `LLM_MODEL` | Optional defaults for the AI coach. Administrators can instead set the endpoint, model and key in **Administration → AI coach**; the key is stored encrypted and never shown again. |
 
 ## Architecture
 

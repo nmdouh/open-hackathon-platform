@@ -71,5 +71,6 @@ export async function toolboxView({ slug }) {
           pick(r, 'description') ? h('p', { class: 'small muted pre' }, pick(r, 'description')) : null))
           : emptyState(t('toolbox.noResources'))),
       h('div', { class: 'stack' },
-        state.config.aiEnabled ? coachPanel(ctx) : h('div', { class: 'notice' }, t('coach.disabled')))));
+        state.config.aiEnabled ? coachPanel(ctx) : h('div', { class: 'notice' }, t('coach.disabled'),
+          ctx.admin ? [' ', h('a', { href: '#/admin' }, t('coach.enableHere'))] : null))));
 }

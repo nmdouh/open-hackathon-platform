@@ -24,6 +24,16 @@ const { startEmbeddedPostgres } = require('./embedded-pg');
     process.once('SIGINT', stop);
     process.once('SIGTERM', stop);
   }
+  if (!process.env.SETTINGS_SECRET) {
+    // Development only: keep a random secret next to the local database so the
+    // AI key saved from the admin page stays readable across restarts.
+    const fs = require('node:fs');
+    const crypto = require('node:crypto');
+    const file = path.join(__dirname, '..', '.data', 'settings-secret');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    if (!fs.existsSync(file)) fs.writeFileSync(file, crypto.randomBytes(32).toString('base64url'), { mode: 0o600 });
+    process.env.SETTINGS_SECRET = fs.readFileSync(file, 'utf8').trim();
+  }
   if (process.argv.includes('--seed')) {
     const { seedDemo } = require('./seed-demo');
     await seedDemo(process.env.DATABASE_URL);
